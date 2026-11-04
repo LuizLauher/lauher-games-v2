@@ -46,6 +46,7 @@ As chamadas multiplayer usam as funções HTTP do mesmo domínio com polling de 
 
 - Modos solo e dois jogadores no mesmo aparelho, categorias, teclado físico/virtual, placar local, áudio e Canvas tradicional da forca.
 - Multiplayer autoritativo no servidor: salas de cinco caracteres, até oito participantes, escolha rotativa, bloqueio do autor da palavra, turnos, reconexão com token rotativo, saída, transferência de anfitrião, placar, classificação e medalhas.
+- Salas e placares ficam no PostgreSQL entre reinicializações; participantes sem atividade só são removidos após 30 dias, evitando que um restart ou hibernação normal apague convites e partidas.
 - O mesmo Canvas é usado nos três modos. Cada erro confirmado no estado da sala atualiza o número de partes da forca renderizadas para todos os participantes.
 - Banco PostgreSQL para salas e pontuação no deploy, com PGlite apenas como fallback de desenvolvimento.
 

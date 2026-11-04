@@ -116,7 +116,7 @@ function mapPlayers(rows: RowPlayer[]): PlayerState[] {
 
 async function sweep(sql: Sql): Promise<void> {
   await sql.query(
-    "delete from forca_players where last_seen < now() - interval '10 minutes'",
+    "delete from forca_players where last_seen < now() - interval '30 days'",
   );
   await sql.query(
     "delete from forca_rooms r where not exists (select 1 from forca_players p where p.room_code = r.code)",
