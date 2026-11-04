@@ -33,10 +33,10 @@ npm start
 
 ## Deploy no Render
 
-1. Crie um novo repositório GitHub usando esta pasta como raiz e envie a branch principal.
-2. No Render, escolha **New → Blueprint** e conecte o novo repositório.
-3. Revise e aplique `render.yaml`. O Blueprint configura Node 22.16.0, `npm ci`, TypeScript, testes, build, `npm start`, `0.0.0.0`, PostgreSQL e o health check `/health`.
-4. Aguarde o deploy. O health check consulta o banco; indisponibilidade do PostgreSQL retorna HTTP 503.
+1. No Render, escolha **New → Blueprint** e conecte `LuizLauher/lauher-games-v2`. Revise e aplique `render.yaml`; ele declara o serviço web e um PostgreSQL (`lauher-games-v2-db`), e liga `DATABASE_URL` à connection string interna desse banco.
+2. Se já existir um serviço web criado manualmente, confirme que ele está na mesma região do PostgreSQL. Em **Environment → Environment Variables**, crie `DATABASE_URL` como referência ao PostgreSQL e selecione a **Internal Database URL**; não cole uma senha no código nem use a URL externa entre serviços Render na mesma região. Salve com **Save, rebuild, and deploy**.
+3. O build executa `npm ci`, typecheck, testes, build e as migrations. Em produção, a etapa de migration agora falha explicitamente se `DATABASE_URL` estiver ausente; não publique um serviço cujo build mostre esse erro.
+4. Após o deploy, confirme nos logs `[migrate] applied 0002_forca.sql` (ou `up to date`) e que `/health` retorna HTTP 200. Se o banco estiver em outra região ou exigir conexão externa, use uma URL apropriada para essa configuração; conexões externas do Render exigem TLS (`sslmode=require`).
 
 O Blueprint escolhe instâncias gratuitas para não criar cobrança sem autorização. **O PostgreSQL gratuito do Render expira 30 dias após sua criação e não serve para persistência de produção em longo prazo.** Antes de depender de dados reais, altere o banco para um plano PostgreSQL pago no Render e confirme o custo vigente. O web service gratuito também pode dormir quando ocioso e apresentar inicialização fria.
 

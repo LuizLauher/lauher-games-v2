@@ -7,8 +7,7 @@ export type DbSource = "postgres" | "pglite";
 // "unset" — otherwise production would silently run on the PGLite fallback.
 const rawDatabaseUrl =
   typeof process !== "undefined" ? process.env.DATABASE_URL : undefined;
-const databaseUrl =
-  rawDatabaseUrl && rawDatabaseUrl.trim() ? rawDatabaseUrl : undefined;
+const databaseUrl = rawDatabaseUrl?.trim() || undefined;
 
 /**
  * Active backend: real **PostgreSQL** when `DATABASE_URL` is set, otherwise a

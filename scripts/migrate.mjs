@@ -17,8 +17,14 @@ import { dirname, join } from "node:path";
 import pg from "pg";
 import { pendingMigrations } from "./migration-plan.mjs";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) {
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[migrate] DATABASE_URL is required in production. Link the Render PostgreSQL database to this web service.",
+    );
+    process.exit(1);
+  }
   console.log(
     "[migrate] DATABASE_URL not set — skipping (the PGLite fallback migrates itself).",
   );
