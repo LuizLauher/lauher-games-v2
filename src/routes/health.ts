@@ -12,7 +12,13 @@ export const Route = createFileRoute("/health")({
         } catch (error) {
           console.error("[health] database check failed:", error);
           return Response.json(
-            { ok: false, service: "lauher-games-v2" },
+            {
+              ok: false,
+              service: "lauher-games-v2",
+              database: process.env.DATABASE_URL?.trim()
+                ? "unavailable"
+                : "not_configured",
+            },
             { status: 503 },
           );
         }

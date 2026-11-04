@@ -42,7 +42,11 @@ async function main() {
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  const pool = new pg.Pool({
+    connectionString: databaseUrl,
+    max: 1,
+    connectionTimeoutMillis: 10_000,
+  });
   const client = await pool.connect();
   let lockAcquired = false;
   try {
