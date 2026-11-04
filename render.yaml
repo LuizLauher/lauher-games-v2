@@ -1,0 +1,27 @@
+# Free Postgres expires 30 days after creation. Upgrade this database to a paid
+# plan in Render before relying on long-term production persistence.
+services:
+  - type: web
+    name: lauher-games-v2
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run typecheck && npm test && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: NODE_ENV
+        value: production
+      - key: NITRO_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lauher-games-v2-db
+          property: connectionString
+
+databases:
+  - name: lauher-games-v2-db
+    databaseName: lauher_forca
+    user: lauher_forca
+    plan: free
