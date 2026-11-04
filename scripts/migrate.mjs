@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Deploy-time database migrator (node-postgres, `pg`).
+ * Startup-time database migrator (node-postgres, `pg`).
  *
- * Runs during `npm run build` — on every Render deploy — applying pending files
- * in ../migrations to DATABASE_URL. Each file is applied in one transaction and
- * recorded in a `_migrations` table, so it runs once and is safe to re-run.
+ * Runs before the web server starts, when Render's private network is available.
+ * Each file is applied in one transaction and recorded in `_migrations`, so it
+ * runs once and is safe to re-run.
  *
  * The read is non-recursive, so only this game's schema is applied.
  *
- * No DATABASE_URL (local / preview builds) -> skip; the PGLite fallback applies
- * the same files at startup instead (see src/lib/db.ts).
+ * No DATABASE_URL in production is a hard failure. Local development can skip;
+ * PGLite applies the same files on its own (see src/lib/db.ts).
  */
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,7 @@ if (!databaseUrl) {
 }
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+const migrationLock = [1481465683, 1];
 
 async function main() {
   const entries = await readdir(migrationsDir);
@@ -43,7 +44,10 @@ async function main() {
 
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
   const client = await pool.connect();
+  let lockAcquired = false;
   try {
+    await client.query("SELECT pg_advisory_lock($1, $2)", migrationLock);
+    lockAcquired = true;
     await client.query(
       "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     );
@@ -74,8 +78,14 @@ async function main() {
     }
     console.log(count ? `[migrate] done — ${count} migration(s) applied.` : "[migrate] up to date.");
   } finally {
-    client.release();
-    await pool.end();
+    try {
+      if (lockAcquired) {
+        await client.query("SELECT pg_advisory_unlock($1, $2)", migrationLock);
+      }
+    } finally {
+      client.release();
+      await pool.end();
+    }
   }
 }
 

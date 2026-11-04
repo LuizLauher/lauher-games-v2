@@ -10,8 +10,8 @@
   },
   "scripts": {
     "dev": "node --env-file-if-exists=.env ./node_modules/vite/bin/vite.js dev --host 0.0.0.0 --port 8080",
-    "start": "node --env-file-if-exists=.env .output/server/index.mjs",
-    "build": "node --env-file-if-exists=.env ./node_modules/vite/bin/vite.js build && npm run db:migrate",
+    "start": "node --env-file-if-exists=.env scripts/migrate.mjs && node --env-file-if-exists=.env .output/server/index.mjs",
+    "build": "node --env-file-if-exists=.env ./node_modules/vite/bin/vite.js build",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
     "preview": "node --env-file-if-exists=.env ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 8081",
     "typecheck": "tsc --noEmit",
