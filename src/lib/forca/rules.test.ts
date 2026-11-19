@@ -24,6 +24,7 @@ function room(partial: Partial<RoomState> = {}): RoomState {
     secret: "",
     wrong: [],
     guessed: [],
+    eliminatedLetters: [],
     result: null,
     lastGuesserId: null,
     wordChooserId: null,
@@ -42,6 +43,7 @@ function players(ids: string[], extra: Partial<PlayerState> = {}): PlayerState[]
     name: id.toUpperCase(),
     score: 0,
     wins: 0,
+    streak: 0,
     connected: true,
     seat,
     ...extra,
@@ -108,6 +110,80 @@ describe("forca rules", () => {
     assert.equal(last.room.result, "won");
     assert.equal(last.scores[0]?.wins, 1);
     assert.equal(last.scores[0]?.score, 15);
+    assert.equal(last.scores[0]?.streak, 1);
+    assert.equal(last.scores[0]?.streakBonus, 0);
+  });
+
+  it("adds the current streak to the win award, starting with no first-win bonus", () => {
+    const roster = players(["a", "b", "c"]);
+    const win = () => guessLetter(
+      room({ phase: "playing", secret: "AA", currentTurnId: "b", wordChooserId: "a" }),
+      roster,
+      "b",
+      "A",
+    );
+    const apply = (scores: ReturnType<typeof guessLetter>["scores"]) => {
+      const player = roster.find((item) => item.id === scores[0]?.playerId)!;
+      player.score = applyScoreDelta(player.score, scores[0]!.score);
+      player.wins += scores[0]!.wins;
+      if (scores[0]!.streak !== undefined) player.streak = scores[0]!.streak!;
+    };
+    let result = win();
+    assert.deepEqual(result.scores[0], {
+      playerId: "b",
+      score: 15,
+      wins: 1,
+      streak: 1,
+      streakBonus: 0,
+    });
+    apply(result.scores);
+    result = win();
+    assert.deepEqual(result.scores[0], {
+      playerId: "b",
+      score: 17,
+      wins: 1,
+      streak: 2,
+      streakBonus: 2,
+    });
+    apply(result.scores);
+    result = win();
+    assert.equal(result.scores[0]?.score, 18);
+    assert.equal(result.scores[0]?.streak, 3);
+    assert.equal(result.scores[0]?.streakBonus, 3);
+  });
+
+  it("keeps streaks through ordinary errors and resets only the player who loses all six lives", () => {
+    const roster = players(["a", "b"]);
+    roster[0] = { ...roster[0]!, streak: 4 };
+    roster[1] = { ...roster[1]!, streak: 3 };
+    const active = room({
+      phase: "playing",
+      secret: "AB",
+      wrong: [],
+      currentTurnId: "b",
+      wordChooserId: "a",
+    });
+    const miss = guessLetter(active, roster, "b", "C");
+    assert.equal(miss.scores[0]?.streak, undefined);
+
+    const finalMiss = guessLetter(
+      room({
+        phase: "playing",
+        secret: "AB",
+        wrong: ["C", "D", "E", "F", "G"],
+        currentTurnId: "b",
+        wordChooserId: "a",
+      }),
+      roster,
+      "b",
+      "H",
+    );
+    assert.equal(finalMiss.room.result, "lost");
+    assert.equal(finalMiss.scores.length, 1);
+    assert.equal(finalMiss.scores[0]?.playerId, "b");
+    assert.equal(finalMiss.scores[0]?.streak, 0);
+    assert.equal(roster[0]?.streak, 4);
+    assert.equal(roster[1]?.streak, 3);
   });
 
   it("uses the 100-point target to end the match and reset eligibility", () => {
@@ -120,6 +196,7 @@ describe("forca rules", () => {
     );
     const scores = players(["a", "b"]);
     scores[1]!.score = 90;
+    scores[1]!.streak = 1;
     let state = word;
     for (const letter of ["S", "O"]) {
       state = guessLetter(state, scores, "b", letter).room;
@@ -128,12 +205,14 @@ describe("forca rules", () => {
     assert.equal(won.room.matchOver, true);
     assert.equal(won.room.notice?.kind, "target");
     assert.match(won.room.notice?.message ?? "", /B alcançou 100 pontos/);
-    assert.equal(won.scores[0]?.score, 15);
+    assert.equal(won.scores[0]?.score, 17);
+    assert.equal(won.scores[0]?.streak, 2);
   });
 
   it("applies the hint cost, keeps the turn, and allows one use per turn", () => {
     const roster = players(["a", "b"]);
     roster[1]!.score = 25;
+    roster[1]!.streak = 3;
     const playing = chooseWord(
       startMatch(room(), roster, "a"),
       roster,
@@ -146,6 +225,8 @@ describe("forca rules", () => {
     assert.equal(hint.room.currentTurnId, "b");
     assert.equal(hint.room.hintUsed, true);
     assert.equal(hint.scores[0]?.score, -10);
+    assert.equal(hint.scores[0]?.streak, undefined);
+    assert.equal(roster[1]?.streak, 3);
     assert.throws(() => useHint(hint.room, roster, "b", "eliminate", "Z"), /já usou/);
 
     for (const score of [4, 5, 9]) {
@@ -158,16 +239,44 @@ describe("forca rules", () => {
     }
 
     const exactlyTen = [...roster];
-    exactlyTen[1] = { ...exactlyTen[1]!, score: 10 };
+    exactlyTen[1] = { ...exactlyTen[1]!, score: 10, streak: 2 };
     const affordable = useHint(playing, exactlyTen, "b", "reveal", "G");
     assert.equal(affordable.room.currentTurnId, "b");
     assert.equal(affordable.scores[0]?.score, -10);
+    assert.equal(affordable.scores[0]?.streak, undefined);
     assert.equal(applyScoreDelta(0, -5), 0);
     assert.equal(applyScoreDelta(0, -10), 0);
     assert.equal(applyScoreDelta(10, -10), 0);
     assert.equal(applyScoreDelta(15, -10), 5);
     assert.equal(applyScoreDelta(20, -10), 10);
     assert.equal(applyScoreDelta(12, -5), 7);
+  });
+
+  it("eliminates an incorrect possibility without adding an error or reducing lives", () => {
+    const roster = players(["a", "b"]);
+    roster[1]!.score = 10;
+    roster[1]!.streak = 2;
+    const playing = chooseWord(
+      startMatch(room(), roster, "a"),
+      roster,
+      "a",
+      "gato",
+      "Animais",
+    );
+    const hint = useHint(playing, roster, "b", "eliminate", "Z");
+
+    assert.deepEqual(hint.room.eliminatedLetters, ["Z"]);
+    assert.deepEqual(hint.room.wrong, []);
+    assert.equal(hint.room.phase, "playing");
+    assert.equal(hint.room.currentTurnId, "b");
+    assert.equal(hint.scores[0]?.score, -10);
+    assert.equal(hint.scores[0]?.streak, undefined);
+    assert.equal(roster[1]?.streak, 2);
+    assert.throws(() => guessLetter(hint.room, roster, "b", "Z"), /já foi tentada/);
+
+    const publicRoom = projectRoom(hint.room, roster, "a");
+    assert.deepEqual(publicRoom.eliminatedLetters, ["Z"]);
+    assert.equal(publicRoom.lives, 6);
   });
 
   it("checks the 100-point target after the clamped hint cost and word award", () => {
@@ -180,12 +289,13 @@ describe("forca rules", () => {
       "Livre",
     );
     roster[1]!.score = 95;
+    roster[1]!.streak = 1;
     const won = useHint(playing, roster, "b", "reveal", "A");
     assert.equal(won.room.matchOver, true);
     assert.equal(won.room.notice?.winnerId, "b");
     assert.deepEqual(won.scores, [
       { playerId: "b", score: -10, wins: 0 },
-      { playerId: "b", score: 15, wins: 1 },
+      { playerId: "b", score: 17, wins: 1, streak: 2, streakBonus: 2 },
     ]);
   });
 
@@ -228,9 +338,9 @@ describe("forca rules", () => {
   it("shares medals on ties and skips the next place", () => {
     const ranked = rankPlayers(
       [
-        { id: "a", name: "Ana", score: 40, wins: 1, connected: true, seat: 0 },
-        { id: "b", name: "Bia", score: 40, wins: 1, connected: true, seat: 1 },
-        { id: "c", name: "Caio", score: 10, wins: 0, connected: true, seat: 2 },
+        { id: "a", name: "Ana", score: 40, wins: 1, streak: 0, connected: true, seat: 0 },
+        { id: "b", name: "Bia", score: 40, wins: 1, streak: 0, connected: true, seat: 1 },
+        { id: "c", name: "Caio", score: 10, wins: 0, streak: 0, connected: true, seat: 2 },
       ],
       "a",
     );

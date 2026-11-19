@@ -161,6 +161,22 @@ export function GameApp() {
       playMiss();
       bumpShake();
     } else if (next.guessed.length > previous.guessed.length) playHit();
+    for (const player of next.players) {
+      const previousPlayer = previous.players.find((item) => item.id === player.id);
+      if (!previousPlayer) continue;
+      if (player.streak > previousPlayer.streak && player.streak >= 2) {
+        toast(`SEQUÊNCIA x${player.streak}! +${player.streak} PONTOS EXTRAS`);
+      } else if (
+        previousPlayer.streak > 0 &&
+        player.streak === 0 &&
+        previous.phase === "playing" &&
+        next.phase === "finished" &&
+        next.result === "lost" &&
+        previous.currentTurnId === player.id
+      ) {
+        toast("SEQUÊNCIA PERDIDA!");
+      }
+    }
   }
 
   function applyRoom(next: PublicRoom) {
@@ -557,15 +573,17 @@ export function GameApp() {
                   ? shownGuessed.includes(letter)
                   : shownGuessed.includes(letter) && normalize(secretForKeys).includes(letter);
                 const wrong = shownWrong.includes(letter);
+                const eliminated = view === "online" && !!room?.eliminatedLetters.includes(letter);
                 const disabled = view === "online"
-                  ? !canGuess || correct || wrong || busy
+                  ? !canGuess || correct || wrong || eliminated || busy
                   : !local.running || shownGuessed.includes(letter) || wrong;
                 return (
                   <button
                     key={letter}
                     type="button"
-                    className={correct ? "key correct" : wrong ? "key wrong" : "key"}
+                    className={correct ? "key correct" : wrong ? "key wrong" : eliminated ? "key eliminated" : "key"}
                     data-letter={letter}
+                    aria-label={eliminated ? `${letter}, eliminada pela dica` : letter}
                     disabled={disabled}
                     onClick={() => (view === "online" ? void sendOnlineGuess(letter) : guessLocal(letter))}
                   >
@@ -648,6 +666,18 @@ export function GameApp() {
 
             {view === "online" && session && room && (
               <>
+                <details className="scoring-info" data-testid="scoring-info">
+                  <summary className="btn ghost">Regras de pontuação</summary>
+                  <ul className="scoring-info-content">
+                    <li>Descobrir a palavra: <strong>+15 pontos</strong></li>
+                    <li>Errar uma letra: <strong>-5 pontos</strong></li>
+                    <li>Usar uma dica: <strong>-10 pontos</strong></li>
+                    <li>Vitórias seguidas: <strong>da segunda em diante, +15 pontos e bônus igual à sequência</strong></li>
+                    <li>Saldo mínimo: <strong>0 pontos</strong></li>
+                    <li>A dica exige saldo mínimo de <strong>10 pontos</strong></li>
+                    <li>A primeira pessoa a alcançar <strong>100 pontos</strong> vence</li>
+                  </ul>
+                </details>
                 <div>
                   <p className="helper">Código da sala</p>
                   <p className="room-code" data-testid="room-code">{room.code}</p>
@@ -679,9 +709,9 @@ export function GameApp() {
                   </>
                 )}
                 {room.phase === "playing" && room.wordChooserId !== you && (
-                  <section className="hint-box" aria-label="Poder Dica">
+                  <section className="hint-box" aria-label="Dica">
                     <div className="panel-head">
-                      <h2>Poder Dica</h2>
+                      <h2>Dica</h2>
                       <span className="tag">custa 10 pontos</span>
                     </div>
                     <p className="helper">
@@ -709,10 +739,6 @@ export function GameApp() {
                         Revelar letra
                       </button>
                     </div>
-                    <p className="helper">Palavra descoberta: +15 · letra errada: -5 · dica: -10. O placar começa em 0 e nunca fica negativo; a dica exige saldo de 10 pontos.</p>
-                    {canGuess && yourScore < 10 && (
-                      <p className="helper" role="status">São necessários 10 pontos para usar a dica.</p>
-                    )}
                   </section>
                 )}
                 <div>
@@ -727,7 +753,18 @@ export function GameApp() {
                           {player.medal === "gold" ? <Crown size={18} /> : player.medal ? <Medal size={18} /> : <span className="place">{player.rank}º</span>}
                         </span>
                         <span className="who">
-                          <b>{player.name}{player.id === you ? " · você" : ""}{player.host ? " · anfitrião" : ""}</b>
+                          <b className="player-name">
+                            <span>{player.name}{player.id === you ? " · você" : ""}{player.host ? " · anfitrião" : ""}</span>
+                            {player.streak >= 2 && (
+                              <span
+                                key={`${player.id}-${player.streak}`}
+                                className="streak-badge"
+                                aria-label={`Sequência x${player.streak}`}
+                              >
+                                x{player.streak}
+                              </span>
+                            )}
+                          </b>
                           <small>{player.connected ? "na sala" : "reconectando"} · {player.wins} vitória{player.wins === 1 ? "" : "s"}</small>
                         </span>
                         <strong>{player.score}</strong>

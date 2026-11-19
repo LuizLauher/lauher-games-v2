@@ -32,6 +32,7 @@ type RowRoom = {
   secret_word: string;
   wrong_letters: string;
   guessed_letters: string;
+  eliminated_letters: string;
   result: string | null;
   last_guesser_id: string | null;
   word_chooser_id: string | null;
@@ -50,6 +51,7 @@ type RowPlayer = {
   name: string;
   score: number;
   wins: number;
+  streak: number;
   seat: number;
   connected: boolean | number | string;
 };
@@ -104,6 +106,7 @@ function mapRoom(row: RowRoom): RoomState {
     secret: row.secret_word ?? "",
     wrong: splitLetters(row.wrong_letters),
     guessed: splitLetters(row.guessed_letters),
+    eliminatedLetters: splitLetters(row.eliminated_letters),
     result: asResult(row.result),
     lastGuesserId: row.last_guesser_id,
     wordChooserId: row.word_chooser_id,
@@ -128,6 +131,7 @@ function mapPlayers(rows: RowPlayer[]): PlayerState[] {
     name: row.name,
     score: Number(row.score) || 0,
     wins: Number(row.wins) || 0,
+    streak: Number(row.streak) || 0,
     connected: asBool(row.connected),
     seat: Number(row.seat) || 0,
   }));
@@ -144,7 +148,7 @@ async function sweep(sql: Sql): Promise<void> {
 
 async function loadRoom(sql: Sql, code: string): Promise<RoomState> {
   const rows = await sql.query<RowRoom>(
-    "select code, host_id, phase, category, secret_word, wrong_letters, guessed_letters, result, last_guesser_id, word_chooser_id, current_turn_id, revision, match_over, hint_used, notice_id, notice_kind, notice_message, winner_id from forca_rooms where code = $1",
+    "select code, host_id, phase, category, secret_word, wrong_letters, guessed_letters, eliminated_letters, result, last_guesser_id, word_chooser_id, current_turn_id, revision, match_over, hint_used, notice_id, notice_kind, notice_message, winner_id from forca_rooms where code = $1",
     [code],
   );
   const row = rows[0];
@@ -154,7 +158,7 @@ async function loadRoom(sql: Sql, code: string): Promise<RoomState> {
 
 async function loadPlayers(sql: Sql, code: string): Promise<PlayerState[]> {
   const rows = await sql.query<RowPlayer>(
-    `select id, name, score, wins, seat,
+    `select id, name, score, wins, streak, seat,
       (last_seen > now() - interval '20 seconds') as connected
      from forca_players where room_code = $1 order by seat asc`,
     [code],
@@ -166,12 +170,12 @@ async function saveRoom(sql: Sql, room: RoomState, expectedRevision: number): Pr
   const rows = await sql.query<{ revision: number }>(
     `update forca_rooms set
       host_id = $2, phase = $3, category = $4, secret_word = $5,
-      wrong_letters = $6, guessed_letters = $7, result = $8,
-      last_guesser_id = $9, word_chooser_id = $10, current_turn_id = $11,
-      match_over = $12, hint_used = $13, notice_id = $14,
-      notice_kind = $15, notice_message = $16, winner_id = $17,
+      wrong_letters = $6, guessed_letters = $7, eliminated_letters = $8, result = $9,
+      last_guesser_id = $10, word_chooser_id = $11, current_turn_id = $12,
+      match_over = $13, hint_used = $14, notice_id = $15,
+      notice_kind = $16, notice_message = $17, winner_id = $18,
       revision = revision + 1, updated_at = now()
-     where code = $1 and revision = $18
+     where code = $1 and revision = $19
      returning revision`,
     [
       room.code,
@@ -181,6 +185,7 @@ async function saveRoom(sql: Sql, room: RoomState, expectedRevision: number): Pr
       room.secret,
       room.wrong.join(","),
       room.guessed.join(","),
+      room.eliminatedLetters.join(","),
       room.result,
       room.lastGuesserId,
       room.wordChooserId,
@@ -199,11 +204,14 @@ async function saveRoom(sql: Sql, room: RoomState, expectedRevision: number): Pr
 
 async function applyScores(sql: Sql, scores: ScoreDelta[]): Promise<void> {
   for (const delta of scores) {
-    await sql.query("update forca_players set score = greatest(0, score + $2), wins = wins + $3 where id = $1", [
-      delta.playerId,
-      delta.score,
-      delta.wins,
-    ]);
+    await sql.query(
+      `update forca_players
+       set score = greatest(0, score + $2),
+           wins = wins + $3,
+           streak = coalesce($4, streak)
+       where id = $1`,
+      [delta.playerId, delta.score, delta.wins, delta.streak ?? null],
+    );
   }
 }
 
@@ -212,7 +220,7 @@ async function touch(sql: Sql, playerId: string): Promise<void> {
 }
 
 async function resetRoomScores(sql: Sql, code: string): Promise<void> {
-  await sql.query("update forca_players set score = 0 where room_code = $1", [code]);
+  await sql.query("update forca_players set score = 0, streak = 0 where room_code = $1", [code]);
 }
 
 async function project(sql: Sql, code: string, youId: string): Promise<PublicRoom> {
@@ -313,7 +321,7 @@ export async function joinRoom(nameRaw: string, codeRaw: string): Promise<Sessio
     const seat = duplicate[0]?.seat ?? players.reduce((max, player) => Math.max(max, player.seat), -1) + 1;
     if (duplicate.length) {
       await tx.query(
-        `update forca_players set name = $2, score = 0, wins = 0, token_hash = $3, last_seen = now()
+        `update forca_players set name = $2, score = 0, wins = 0, streak = 0, token_hash = $3, last_seen = now()
          where id = $1 and room_code = $4`,
         [id, name, sha(token), code],
       );

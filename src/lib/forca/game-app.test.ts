@@ -13,6 +13,7 @@ function room(phase: PublicRoom["phase"], wrong: string[]): PublicRoom {
     maxLives: 6,
     wrong,
     guessed: [],
+    eliminatedLetters: [],
     masked: "___",
     revealed: null,
     result: null,
@@ -51,5 +52,23 @@ describe("shared hangman drawing", () => {
     assert.match(app, /const canUseHint = canGuess && yourScore >= 10 && !room\?\.hintUsed/);
     assert.match(app, /disabled=\{!canUseHint \|\| busy\}/);
     assert.match(app, /myScore < 10/);
+  });
+
+  it("shows scoring rules in the multiplayer sidebar and names the control Dica", () => {
+    const app = readFileSync(new URL("../../components/forca/game-app.tsx", import.meta.url), "utf8");
+    assert.match(app, /<details className="scoring-info" data-testid="scoring-info">/);
+    assert.match(app, /<summary className="btn ghost">Regras de pontuação<\/summary>/);
+    assert.match(app, /Vitórias seguidas: <strong>da segunda em diante, \+15 pontos e bônus igual à sequência<\/strong>/);
+    assert.match(app, /<h2>Dica<\/h2>/);
+    assert.doesNotMatch(app, /<h2>Poder Dica<\/h2>/);
+    assert.doesNotMatch(app, /Palavra descoberta: \+15.*letra errada: -5/);
+  });
+
+  it("renders a per-player streak badge and syncs streak feedback from room updates", () => {
+    const app = readFileSync(new URL("../../components/forca/game-app.tsx", import.meta.url), "utf8");
+    assert.match(app, /player\.streak >= 2/);
+    assert.match(app, /className="streak-badge"/);
+    assert.match(app, /SEQUÊNCIA x\$\{player\.streak\}! \+\$\{player\.streak\} PONTOS EXTRAS/);
+    assert.match(app, /SEQUÊNCIA PERDIDA!/);
   });
 });

@@ -22,6 +22,7 @@ export type RoomState = {
   secret: string;
   wrong: string[];
   guessed: string[];
+  eliminatedLetters: string[];
   result: RoundResult;
   lastGuesserId: string | null;
   wordChooserId: string | null;
@@ -37,17 +38,25 @@ export type PlayerState = {
   name: string;
   score: number;
   wins: number;
+  streak: number;
   connected: boolean;
   seat: number;
 };
 
-export type ScoreDelta = { playerId: string; score: number; wins: number };
+export type ScoreDelta = {
+  playerId: string;
+  score: number;
+  wins: number;
+  streak?: number;
+  streakBonus?: number;
+};
 
 export type PublicPlayer = {
   id: string;
   name: string;
   score: number;
   wins: number;
+  streak: number;
   connected: boolean;
   host: boolean;
   rank: number;
@@ -64,6 +73,7 @@ export type PublicRoom = {
   maxLives: number;
   wrong: string[];
   guessed: string[];
+  eliminatedLetters: string[];
   masked: string;
   revealed: string | null;
   result: RoundResult;
@@ -179,7 +189,13 @@ export function nextGuesser(
 }
 
 function bump(room: RoomState): RoomState {
-  return { ...room, wrong: [...room.wrong], guessed: [...room.guessed], revision: room.revision + 1 };
+  return {
+    ...room,
+    wrong: [...room.wrong],
+    guessed: [...room.guessed],
+    eliminatedLetters: [...room.eliminatedLetters],
+    revision: room.revision + 1,
+  };
 }
 
 function endForTooFewPlayers(room: RoomState, players: readonly PlayerState[]): RoomState {
@@ -190,6 +206,7 @@ function endForTooFewPlayers(room: RoomState, players: readonly PlayerState[]): 
   next.secret = "";
   next.wrong = [];
   next.guessed = [];
+  next.eliminatedLetters = [];
   next.result = null;
   next.lastGuesserId = null;
   next.wordChooserId = null;
@@ -212,7 +229,12 @@ function finishRound(
   actorId: string,
   scoreAfterAward: number,
 ): RoomState {
-  const next = { ...room, wrong: [...room.wrong], guessed: [...room.guessed] };
+  const next = {
+    ...room,
+    wrong: [...room.wrong],
+    guessed: [...room.guessed],
+    eliminatedLetters: [...room.eliminatedLetters],
+  };
   next.phase = "finished";
   next.result = "won";
   next.currentTurnId = nextPlayer(players, room.wordChooserId);
@@ -230,6 +252,12 @@ function finishRound(
     };
   }
   return next;
+}
+
+function winningScore(playerId: string, currentStreak: number): ScoreDelta {
+  const streak = currentStreak + 1;
+  const streakBonus = streak >= 2 ? streak : 0;
+  return { playerId, score: 15 + streakBonus, wins: 1, streak, streakBonus };
 }
 
 export function reconcile(room: RoomState, players: readonly PlayerState[]): RoomState {
@@ -281,6 +309,7 @@ export function startMatch(room: RoomState, players: readonly PlayerState[], act
   next.category = "";
   next.wrong = [];
   next.guessed = [];
+  next.eliminatedLetters = [];
   next.result = null;
   next.wordChooserId = null;
   next.lastGuesserId = null;
@@ -314,6 +343,7 @@ export function chooseWord(
   next.phase = "playing";
   next.wrong = [];
   next.guessed = [];
+  next.eliminatedLetters = [];
   next.result = null;
   next.lastGuesserId = null;
   next.currentTurnId = guesser;
@@ -336,7 +366,11 @@ export function guessLetter(
   if (room.currentTurnId !== actorId) throw new RuleError("Ainda não é a sua vez.");
   const letter = normalizeGuess(rawLetter);
   if (!letter) throw new RuleError("Envie apenas uma letra de A a Z.");
-  if (room.guessed.includes(letter) || room.wrong.includes(letter)) {
+  if (
+    room.guessed.includes(letter) ||
+    room.wrong.includes(letter) ||
+    room.eliminatedLetters.includes(letter)
+  ) {
     throw new RuleError("Essa letra já foi tentada.");
   }
   const next = bump(room);
@@ -345,17 +379,20 @@ export function guessLetter(
   if (normalize(room.secret).includes(letter)) {
     next.guessed = [...room.guessed, letter];
     if (allLettersFound(next.secret, next.guessed)) {
-      scores.push({ playerId: actorId, score: 15, wins: 1 });
-      const currentScore = players.find((player) => player.id === actorId)?.score ?? 0;
-      const finished = finishRound(next, players, actorId, currentScore + 15);
+      const player = players.find((item) => item.id === actorId);
+      if (!player) throw new RuleError("Jogador não encontrado.");
+      const award = winningScore(actorId, player.streak);
+      scores.push(award);
+      const finished = finishRound(next, players, actorId, player.score + award.score);
       return { room: finished, scores };
     } else {
       next.currentTurnId = nextGuesser(players, actorId, room.wordChooserId);
     }
   } else {
     next.wrong = [...room.wrong, letter];
-    scores.push({ playerId: actorId, score: -5, wins: 0 });
-    if (next.wrong.length >= MAX_LIVES) {
+    const lostRound = next.wrong.length >= MAX_LIVES;
+    scores.push({ playerId: actorId, score: -5, wins: 0, ...(lostRound ? { streak: 0 } : {}) });
+    if (lostRound) {
       next.phase = "finished";
       next.result = "lost";
       next.currentTurnId = nextPlayer(players, room.wordChooserId);
@@ -369,7 +406,7 @@ export function guessLetter(
 }
 
 export function hintCandidates(room: RoomState, mode: HintMode): string[] {
-  const used = new Set([...room.guessed, ...room.wrong]);
+  const used = new Set([...room.guessed, ...room.wrong, ...room.eliminatedLetters]);
   return [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter((letter) => {
     if (used.has(letter)) return false;
     const inSecret = normalize(room.secret).includes(letter);
@@ -406,26 +443,21 @@ export function useHint(
   next.hintUsed = true;
   const scores: ScoreDelta[] = [{ playerId: actorId, score: -10, wins: 0 }];
   if (mode === "reveal") next.guessed = [...next.guessed, letter];
-  else next.wrong = [...next.wrong, letter];
+  else next.eliminatedLetters = [...next.eliminatedLetters, letter];
 
   if (mode === "reveal" && allLettersFound(next.secret, next.guessed)) {
-    scores.push({ playerId: actorId, score: 15, wins: 1 });
+    const award = winningScore(actorId, player.streak);
+    scores.push(award);
     next.lastGuesserId = actorId;
     const finished = finishRound(
       next,
       players,
       actorId,
-      applyScoreDelta(applyScoreDelta(player.score, -10), 15),
+      applyScoreDelta(applyScoreDelta(player.score, -10), award.score),
     );
     return { room: finished, scores, letter };
   }
 
-  if (mode === "eliminate" && next.wrong.length >= MAX_LIVES) {
-    next.phase = "finished";
-    next.result = "lost";
-    next.currentTurnId = nextPlayer(players, room.wordChooserId);
-    next.hintUsed = false;
-  }
   next.notice = {
     id: next.revision,
     kind: "hint",
@@ -487,6 +519,7 @@ export function rankPlayers(players: readonly PlayerState[], hostId: string): Pu
       name: player.name,
       score: player.score,
       wins: player.wins,
+      streak: player.streak,
       connected: player.connected,
       host: player.id === hostId,
       rank,
@@ -507,6 +540,7 @@ export function projectRoom(room: RoomState, players: readonly PlayerState[], yo
     maxLives: MAX_LIVES,
     wrong: [...room.wrong],
     guessed: [...room.guessed],
+    eliminatedLetters: [...room.eliminatedLetters],
     masked: showRound ? maskWord(room.secret, room.guessed, room.phase === "finished") : "",
     revealed: room.phase === "finished" ? room.secret : null,
     result: room.result,

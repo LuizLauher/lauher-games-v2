@@ -279,6 +279,12 @@
   color: #fecdd3;
 }
 
+.key.eliminated {
+  border-style: dashed;
+  color: var(--color-chalk);
+  text-decoration: line-through;
+}
+
 .key:disabled {
   opacity: 0.55;
 }
@@ -460,6 +466,28 @@
   font-size: 0.78rem;
 }
 
+.who .player-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.streak-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-gold) 55%, var(--color-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-gold) 14%, var(--color-surface));
+  color: var(--color-gold);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0.24rem 0.42rem;
+  animation: streak-pop 260ms ease-out;
+}
+
 .pips {
   display: flex;
   gap: 0.3rem;
@@ -495,6 +523,32 @@
 
 .hint-box .helper {
   margin: 0.4rem 0 0.7rem;
+}
+
+.scoring-info summary {
+  list-style: none;
+}
+
+.scoring-info summary::-webkit-details-marker {
+  display: none;
+}
+
+.scoring-info-content {
+  margin: 0.55rem 0 0;
+  padding: 0.75rem 0.9rem 0.75rem 2rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--color-surface-2) 72%, transparent);
+  color: var(--color-muted);
+  font-size: 0.88rem;
+}
+
+.scoring-info-content li + li {
+  margin-top: 0.25rem;
+}
+
+.scoring-info-content strong {
+  color: var(--color-ink);
 }
 
 .toasts {
@@ -539,7 +593,8 @@
 @media (prefers-reduced-motion: reduce) {
   .gallows.is-shaking,
   .slot.revealed,
-  .toast {
+  .toast,
+  .streak-badge {
     animation: none;
   }
 }
@@ -558,4 +613,10 @@
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes streak-pop {
+  0% { opacity: 0.5; transform: scale(0.82); }
+  70% { transform: scale(1.12); }
+  100% { opacity: 1; transform: scale(1); }
 }
