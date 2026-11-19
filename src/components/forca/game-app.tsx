@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Crown, House, Medal, Music, RotateCcw, User, Users, Volume2, VolumeX, Wifi } from "lucide-react";
+import { ChevronDown, Copy, Crown, Flame, House, Medal, Music, RotateCcw, User, Users, Volume2, VolumeX, Wifi } from "lucide-react";
 import { beginMatchFn, createRoomFn, joinRoomFn, leaveRoomFn, resumeRoomFn, submitGuessFn, submitWordFn, syncRoomFn, usePowerHintFn } from "@/lib/forca/api";
 import {
   audioPrefs,
@@ -91,6 +91,7 @@ export function GameApp() {
   const [audio, setAudio] = useState({ music: true, sfx: true });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const roomRef = useRef<PublicRoom | null>(null);
+  const scoringInfoRef = useRef<HTMLDetailsElement | null>(null);
   const toastId = useRef(0);
   const noticeRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
@@ -104,6 +105,28 @@ export function GameApp() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    function closeScoringInfo(event: PointerEvent) {
+      const panel = scoringInfoRef.current;
+      if (panel?.open && event.target instanceof Node && !panel.contains(event.target)) {
+        panel.open = false;
+      }
+    }
+
+    function closeScoringInfoOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && scoringInfoRef.current?.open) {
+        scoringInfoRef.current.open = false;
+      }
+    }
+
+    document.addEventListener("pointerdown", closeScoringInfo);
+    document.addEventListener("keydown", closeScoringInfoOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeScoringInfo);
+      document.removeEventListener("keydown", closeScoringInfoOnEscape);
+    };
+  }, []);
 
   function toast(text: string) {
     const id = ++toastId.current;
@@ -666,17 +689,23 @@ export function GameApp() {
 
             {view === "online" && session && room && (
               <>
-                <details className="scoring-info" data-testid="scoring-info">
-                  <summary className="btn ghost">Regras de pontuação</summary>
-                  <ul className="scoring-info-content">
-                    <li>Descobrir a palavra: <strong>+15 pontos</strong></li>
-                    <li>Errar uma letra: <strong>-5 pontos</strong></li>
-                    <li>Usar uma dica: <strong>-10 pontos</strong></li>
-                    <li>Vitórias seguidas: <strong>da segunda em diante, +15 pontos e bônus igual à sequência</strong></li>
-                    <li>Saldo mínimo: <strong>0 pontos</strong></li>
-                    <li>A dica exige saldo mínimo de <strong>10 pontos</strong></li>
-                    <li>A primeira pessoa a alcançar <strong>100 pontos</strong> vence</li>
-                  </ul>
+                <details ref={scoringInfoRef} className="scoring-info" data-testid="scoring-info">
+                  <summary className="btn ghost">
+                    <span>Regras de pontuação</span>
+                    <ChevronDown size={16} aria-hidden="true" />
+                  </summary>
+                  <div className="scoring-info-content">
+                    <h3>Regras de pontuação</h3>
+                    <dl>
+                      <div><dt>Palavra descoberta</dt><dd>+15 pontos</dd></div>
+                      <div><dt>Letra errada</dt><dd>-5 pontos</dd></div>
+                      <div><dt>Utilização da dica</dt><dd>-10 pontos</dd></div>
+                      <div><dt>Bônus de sequência</dt><dd>conforme o multiplicador atual</dd></div>
+                      <div><dt>Saldo mínimo para usar dica</dt><dd>10 pontos</dd></div>
+                      <div><dt>Saldo mínimo</dt><dd>0 pontos</dd></div>
+                      <div><dt>Vitória da partida</dt><dd>ao alcançar 100 pontos</dd></div>
+                    </dl>
+                  </div>
                 </details>
                 <div>
                   <p className="helper">Código da sala</p>
@@ -753,20 +782,18 @@ export function GameApp() {
                           {player.medal === "gold" ? <Crown size={18} /> : player.medal ? <Medal size={18} /> : <span className="place">{player.rank}º</span>}
                         </span>
                         <span className="who">
-                          <b className="player-name">
-                            <span>{player.name}{player.id === you ? " · você" : ""}{player.host ? " · anfitrião" : ""}</span>
-                            {player.streak >= 2 && (
-                              <span
-                                key={`${player.id}-${player.streak}`}
-                                className="streak-badge"
-                                aria-label={`Sequência x${player.streak}`}
-                              >
-                                x{player.streak}
-                              </span>
-                            )}
-                          </b>
-                          <small>{player.connected ? "na sala" : "reconectando"} · {player.wins} vitória{player.wins === 1 ? "" : "s"}</small>
+                          <b className="player-name">{player.name}{player.host ? " · anfitrião" : ""}</b>
                         </span>
+                        {player.streak >= 2 && (
+                          <span
+                            key={`${player.id}-${player.streak}`}
+                            className="streak-badge"
+                            aria-label={`Sequência x${player.streak}`}
+                          >
+                            <Flame size={14} strokeWidth={2.5} aria-hidden="true" />
+                            x{player.streak}
+                          </span>
+                        )}
                         <strong>{player.score}</strong>
                       </li>
                     ))}

@@ -56,9 +56,15 @@ describe("shared hangman drawing", () => {
 
   it("shows scoring rules in the multiplayer sidebar and names the control Dica", () => {
     const app = readFileSync(new URL("../../components/forca/game-app.tsx", import.meta.url), "utf8");
-    assert.match(app, /<details className="scoring-info" data-testid="scoring-info">/);
-    assert.match(app, /<summary className="btn ghost">Regras de pontuação<\/summary>/);
-    assert.match(app, /Vitórias seguidas: <strong>da segunda em diante, \+15 pontos e bônus igual à sequência<\/strong>/);
+    assert.match(app, /<details ref={scoringInfoRef} className="scoring-info" data-testid="scoring-info">/);
+    assert.match(app, /<summary className="btn ghost">/);
+    assert.match(app, /<h3>Regras de pontuação<\/h3>/);
+    assert.match(app, /<dt>Palavra descoberta<\/dt><dd>\+15 pontos<\/dd>/);
+    assert.match(app, /<dt>Utilização da dica<\/dt><dd>-10 pontos<\/dd>/);
+    assert.match(app, /<dt>Bônus de sequência<\/dt><dd>conforme o multiplicador atual<\/dd>/);
+    assert.match(app, /<dt>Saldo mínimo para usar dica<\/dt><dd>10 pontos<\/dd>/);
+    assert.match(app, /event\.key === "Escape"/);
+    assert.match(app, /panel\.contains\(event\.target\)/);
     assert.match(app, /<h2>Dica<\/h2>/);
     assert.doesNotMatch(app, /<h2>Poder Dica<\/h2>/);
     assert.doesNotMatch(app, /Palavra descoberta: \+15.*letra errada: -5/);
@@ -68,6 +74,10 @@ describe("shared hangman drawing", () => {
     const app = readFileSync(new URL("../../components/forca/game-app.tsx", import.meta.url), "utf8");
     assert.match(app, /player\.streak >= 2/);
     assert.match(app, /className="streak-badge"/);
+    assert.match(app, /<Flame size=\{14\} strokeWidth=\{2\.5\} aria-hidden="true" \/>/);
+    assert.ok(app.indexOf('className="player-name"') < app.indexOf("className=\"streak-badge\""));
+    assert.ok(app.indexOf("className=\"streak-badge\"") < app.indexOf("<strong>{player.score}</strong>"));
+    assert.doesNotMatch(app, /<small>\{player\.connected \? "na sala"/);
     assert.match(app, /SEQUÊNCIA x\$\{player\.streak\}! \+\$\{player\.streak\} PONTOS EXTRAS/);
     assert.match(app, /SEQUÊNCIA PERDIDA!/);
   });

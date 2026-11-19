@@ -424,8 +424,8 @@
 
 .score-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.55rem;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0.75rem;
   align-items: center;
   border: 1px solid var(--color-line);
   border-radius: 0.85rem;
@@ -467,25 +467,36 @@
 }
 
 .who .player-name {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .streak-badge {
   display: inline-flex;
   flex: none;
   align-items: center;
-  border: 1px solid color-mix(in srgb, var(--color-gold) 55%, var(--color-line));
+  justify-content: center;
+  gap: 0.22rem;
+  border: 1px solid color-mix(in srgb, #ff9b54 52%, var(--color-line));
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-gold) 14%, var(--color-surface));
-  color: var(--color-gold);
+  background: linear-gradient(135deg, color-mix(in srgb, #ff9b54 17%, var(--color-surface)), color-mix(in srgb, var(--color-gold) 12%, var(--color-surface)));
+  color: #ffc078;
   font-size: 0.72rem;
   font-weight: 800;
   line-height: 1;
-  padding: 0.24rem 0.42rem;
+  padding: 0.28rem 0.48rem;
+  white-space: nowrap;
   animation: streak-pop 260ms ease-out;
+}
+
+.score-row > strong {
+  grid-column: 4;
+  min-width: 2ch;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .pips {
@@ -525,8 +536,27 @@
   margin: 0.4rem 0 0.7rem;
 }
 
+.scoring-info {
+  position: relative;
+  z-index: 1;
+}
+
 .scoring-info summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   list-style: none;
+}
+
+.scoring-info summary svg {
+  flex: none;
+  transition: transform 160ms ease;
+}
+
+.scoring-info[open] summary svg {
+  transform: rotate(180deg);
 }
 
 .scoring-info summary::-webkit-details-marker {
@@ -534,21 +564,56 @@
 }
 
 .scoring-info-content {
-  margin: 0.55rem 0 0;
-  padding: 0.75rem 0.9rem 0.75rem 2rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.85rem;
-  background: color-mix(in srgb, var(--color-surface-2) 72%, transparent);
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--color-plum) 32%, var(--color-line));
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--color-surface-2) 96%, var(--color-bg));
+  box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 36%), 0 0.2rem 0.8rem rgb(0 0 0 / 22%);
   color: var(--color-muted);
-  font-size: 0.88rem;
+  font-size: 0.84rem;
 }
 
-.scoring-info-content li + li {
-  margin-top: 0.25rem;
-}
-
-.scoring-info-content strong {
+.scoring-info-content h3 {
+  margin: 0 0 0.65rem;
   color: var(--color-ink);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.scoring-info-content dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.scoring-info-content dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(6.5rem, auto);
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.55rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-line) 75%, transparent);
+}
+
+.scoring-info-content dt {
+  min-width: 0;
+}
+
+.scoring-info-content dd {
+  margin: 0;
+  color: var(--color-ink);
+  font-weight: 700;
+  text-align: right;
 }
 
 .toasts {
@@ -596,6 +661,10 @@
   .toast,
   .streak-badge {
     animation: none;
+  }
+
+  .scoring-info summary svg {
+    transition: none;
   }
 }
 
