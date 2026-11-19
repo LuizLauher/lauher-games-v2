@@ -476,6 +476,27 @@
   background: var(--color-danger);
 }
 
+.hint-box {
+  border: 1px solid color-mix(in srgb, var(--color-plum) 45%, var(--color-line));
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--color-plum) 8%, var(--color-surface));
+  padding: 0.85rem;
+}
+
+.hint-box .panel-head {
+  margin-bottom: 0.35rem;
+}
+
+.hint-box h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.hint-box .helper {
+  margin: 0.4rem 0 0.7rem;
+}
+
 .toasts {
   position: fixed;
   right: 0.75rem;
@@ -497,6 +518,7 @@
   color: var(--color-ink);
   padding: 0.65rem 0.75rem;
   box-shadow: 0 10px 30px rgb(0 0 0 / 28%);
+  animation: toast-in 180ms ease-out;
 }
 
 .footer {
@@ -516,7 +538,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .gallows.is-shaking,
-  .slot.revealed {
+  .slot.revealed,
+  .toast {
     animation: none;
   }
 }
@@ -528,6 +551,11 @@
 }
 
 @keyframes slot-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }

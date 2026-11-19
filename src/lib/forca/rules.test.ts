@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  applyScoreDelta,
   afterLeave,
   chooseWord,
   guessLetter,
+  useHint,
   maskWord,
   normalize,
   projectRoom,
@@ -27,6 +29,9 @@ function room(partial: Partial<RoomState> = {}): RoomState {
     wordChooserId: null,
     currentTurnId: "a",
     revision: 1,
+    matchOver: false,
+    hintUsed: false,
+    notice: null,
     ...partial,
   };
 }
@@ -67,10 +72,12 @@ describe("forca rules", () => {
     const hit = guessLetter(playing, players(["a", "b", "c"]), "b", "g");
     assert.equal(hit.room.wrong.length, 0);
     assert.equal(hit.room.currentTurnId, "c");
-    assert.equal(hit.scores[0]?.score, 10);
+    assert.deepEqual(hit.scores, []);
+    assert.throws(() => guessLetter(hit.room, players(["a", "b", "c"]), "c", "g"), /já foi tentada/);
     const miss = guessLetter(hit.room, players(["a", "b", "c"]), "c", "z");
     assert.deepEqual(miss.room.wrong, ["Z"]);
     assert.equal(miss.room.currentTurnId, "b");
+    assert.equal(miss.scores[0]?.score, -5);
   });
 
   it("draws a loss at six mistakes and a win only for the finishing guess", () => {
@@ -89,7 +96,7 @@ describe("forca rules", () => {
     const lost = guessLetter(state, players(["a", "b"]), "b", "H");
     assert.equal(lost.room.phase, "finished");
     assert.equal(lost.room.result, "lost");
-    assert.equal(lost.scores.length, 0);
+    assert.equal(lost.scores[0]?.score, -5);
     assert.equal(lost.room.currentTurnId, "b");
 
     const again = chooseWord(lost.room, players(["a", "b"]), "b", "sol", "Natureza");
@@ -100,7 +107,102 @@ describe("forca rules", () => {
     const last = guessLetter(done.room, players(["a", "b"]), "a", "l");
     assert.equal(last.room.result, "won");
     assert.equal(last.scores[0]?.wins, 1);
-    assert.ok((last.scores[0]?.score ?? 0) > 10);
+    assert.equal(last.scores[0]?.score, 15);
+  });
+
+  it("uses the 100-point target to end the match and reset eligibility", () => {
+    const word = chooseWord(
+      startMatch(room(), players(["a", "b"]), "a"),
+      players(["a", "b"]),
+      "a",
+      "sol",
+      "Natureza",
+    );
+    const scores = players(["a", "b"]);
+    scores[1]!.score = 90;
+    let state = word;
+    for (const letter of ["S", "O"]) {
+      state = guessLetter(state, scores, "b", letter).room;
+    }
+    const won = guessLetter(state, scores, "b", "L");
+    assert.equal(won.room.matchOver, true);
+    assert.equal(won.room.notice?.kind, "target");
+    assert.match(won.room.notice?.message ?? "", /B alcançou 100 pontos/);
+    assert.equal(won.scores[0]?.score, 15);
+  });
+
+  it("applies the hint cost, keeps the turn, and allows one use per turn", () => {
+    const roster = players(["a", "b"]);
+    roster[1]!.score = 25;
+    const playing = chooseWord(
+      startMatch(room(), roster, "a"),
+      roster,
+      "a",
+      "gato",
+      "Animais",
+    );
+    const hint = useHint(playing, roster, "b", "reveal", "G");
+    assert.deepEqual(hint.room.guessed, ["G"]);
+    assert.equal(hint.room.currentTurnId, "b");
+    assert.equal(hint.room.hintUsed, true);
+    assert.equal(hint.scores[0]?.score, -10);
+    assert.throws(() => useHint(hint.room, roster, "b", "eliminate", "Z"), /já usou/);
+
+    for (const score of [4, 5, 9]) {
+      const blocked = [...roster];
+      blocked[1] = { ...blocked[1]!, score };
+      assert.throws(
+        () => useHint(playing, blocked, "b", "reveal", "G"),
+        /pelo menos 10 pontos/,
+      );
+    }
+
+    const exactlyTen = [...roster];
+    exactlyTen[1] = { ...exactlyTen[1]!, score: 10 };
+    const affordable = useHint(playing, exactlyTen, "b", "reveal", "G");
+    assert.equal(affordable.room.currentTurnId, "b");
+    assert.equal(affordable.scores[0]?.score, -10);
+    assert.equal(applyScoreDelta(0, -5), 0);
+    assert.equal(applyScoreDelta(0, -10), 0);
+    assert.equal(applyScoreDelta(10, -10), 0);
+    assert.equal(applyScoreDelta(15, -10), 5);
+    assert.equal(applyScoreDelta(20, -10), 10);
+    assert.equal(applyScoreDelta(12, -5), 7);
+  });
+
+  it("checks the 100-point target after the clamped hint cost and word award", () => {
+    const roster = players(["a", "b"]);
+    const playing = chooseWord(
+      startMatch(room(), roster, "a"),
+      roster,
+      "a",
+      "aa",
+      "Livre",
+    );
+    roster[1]!.score = 95;
+    const won = useHint(playing, roster, "b", "reveal", "A");
+    assert.equal(won.room.matchOver, true);
+    assert.equal(won.room.notice?.winnerId, "b");
+    assert.deepEqual(won.scores, [
+      { playerId: "b", score: -10, wins: 0 },
+      { playerId: "b", score: 15, wins: 1 },
+    ]);
+  });
+
+  it("ends an active match when fewer than two players remain", () => {
+    const roster = players(["a", "b"]);
+    const playing = chooseWord(
+      startMatch(room(), roster, "a"),
+      roster,
+      "a",
+      "gato",
+      "Animais",
+    );
+    const ended = afterLeave(playing, roster, "b");
+    assert.equal(ended?.matchOver, true);
+    assert.equal(ended?.notice?.message, "A partida encerrou");
+    assert.equal(ended?.phase, "finished");
+    assert.equal(ended?.secret, "");
   });
 
   it("transfers the host and never publishes the secret during play", () => {

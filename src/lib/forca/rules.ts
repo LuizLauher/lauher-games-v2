@@ -4,6 +4,15 @@ export const MAX_PLAYERS = 8;
 export type Phase = "lobby" | "choosing" | "playing" | "finished";
 export type RoundResult = "won" | "lost" | null;
 export type Medal = "gold" | "silver" | "bronze" | null;
+export type HintMode = "eliminate" | "reveal";
+export type NoticeKind = "players" | "target" | "hint";
+
+export type RoomNotice = {
+  id: number;
+  kind: NoticeKind;
+  message: string;
+  winnerId: string | null;
+};
 
 export type RoomState = {
   code: string;
@@ -18,6 +27,9 @@ export type RoomState = {
   wordChooserId: string | null;
   currentTurnId: string | null;
   revision: number;
+  matchOver: boolean;
+  hintUsed: boolean;
+  notice: RoomNotice | null;
 };
 
 export type PlayerState = {
@@ -60,17 +72,10 @@ export type PublicRoom = {
   players: PublicPlayer[];
   revision: number;
   youId: string;
+  matchOver: boolean;
+  hintUsed: boolean;
+  notice: RoomNotice | null;
 };
-
-export function displayedMistakes(
-  view: "home" | "solo" | "duo" | "online",
-  localWrongCount: number,
-  room: PublicRoom | null,
-): number {
-  if (view !== "online") return localWrongCount;
-  if (room?.phase === "playing" || room?.phase === "finished") return room.wrong.length;
-  return 0;
-}
 
 export class RuleError extends Error {
   constructor(message: string) {
@@ -137,6 +142,20 @@ export function livesLeft(wrong: readonly string[]): number {
   return Math.max(0, MAX_LIVES - wrong.length);
 }
 
+export function displayedMistakes(
+  view: "home" | "solo" | "duo" | "online",
+  localWrongCount: number,
+  room: PublicRoom | null,
+): number {
+  if (view !== "online") return localWrongCount;
+  if (room?.phase === "playing" || room?.phase === "finished") return room.wrong.length;
+  return 0;
+}
+
+export function applyScoreDelta(score: number, delta: number): number {
+  return Math.max(0, score + delta);
+}
+
 export function connectedPlayers(players: readonly PlayerState[]): PlayerState[] {
   return players.filter((player) => player.connected);
 }
@@ -163,8 +182,61 @@ function bump(room: RoomState): RoomState {
   return { ...room, wrong: [...room.wrong], guessed: [...room.guessed], revision: room.revision + 1 };
 }
 
+function endForTooFewPlayers(room: RoomState, players: readonly PlayerState[]): RoomState {
+  const next = bump(room);
+  const online = connectedPlayers(players);
+  next.phase = "finished";
+  next.category = "";
+  next.secret = "";
+  next.wrong = [];
+  next.guessed = [];
+  next.result = null;
+  next.lastGuesserId = null;
+  next.wordChooserId = null;
+  next.currentTurnId = online[0]?.id ?? null;
+  if (online[0]) next.hostId = online[0].id;
+  next.matchOver = true;
+  next.hintUsed = false;
+  next.notice = {
+    id: next.revision,
+    kind: "players",
+    message: "A partida encerrou",
+    winnerId: null,
+  };
+  return next;
+}
+
+function finishRound(
+  room: RoomState,
+  players: readonly PlayerState[],
+  actorId: string,
+  scoreAfterAward: number,
+): RoomState {
+  const next = { ...room, wrong: [...room.wrong], guessed: [...room.guessed] };
+  next.phase = "finished";
+  next.result = "won";
+  next.currentTurnId = nextPlayer(players, room.wordChooserId);
+  next.hintUsed = false;
+  next.notice = null;
+  if (scoreAfterAward >= 100) {
+    const winner = players.find((player) => player.id === actorId);
+    next.matchOver = true;
+    next.currentTurnId = null;
+    next.notice = {
+      id: next.revision,
+      kind: "target",
+      message: `META ATINGIDA! ${winner?.name ?? "O jogador"} alcançou 100 pontos e venceu a partida!`,
+      winnerId: actorId,
+    };
+  }
+  return next;
+}
+
 export function reconcile(room: RoomState, players: readonly PlayerState[]): RoomState {
   const online = connectedPlayers(players);
+  if (!room.matchOver && room.phase !== "lobby" && online.length < 2) {
+    return endForTooFewPlayers(room, players);
+  }
   if (!online.length) return room;
   const next = bump(room);
   let changed = false;
@@ -180,6 +252,7 @@ export function reconcile(room: RoomState, players: readonly PlayerState[]): Roo
         : nextPlayer(players, room.currentTurnId);
     if (id && id !== room.currentTurnId) {
       next.currentTurnId = id;
+      next.hintUsed = false;
       changed = true;
     }
   }
@@ -187,6 +260,7 @@ export function reconcile(room: RoomState, players: readonly PlayerState[]): Roo
     const id = nextGuesser(players, room.wordChooserId, room.wordChooserId);
     if (id && id !== next.currentTurnId) {
       next.currentTurnId = id;
+      next.hintUsed = false;
       changed = true;
     }
   }
@@ -195,11 +269,21 @@ export function reconcile(room: RoomState, players: readonly PlayerState[]): Roo
 
 export function startMatch(room: RoomState, players: readonly PlayerState[], actorId: string): RoomState {
   if (actorId !== room.hostId) throw new RuleError("Só o anfitrião pode iniciar a partida.");
-  if (room.phase !== "lobby") throw new RuleError("A partida já foi iniciada.");
+  if (room.phase !== "lobby" && !room.matchOver) throw new RuleError("A partida já foi iniciada.");
   const online = connectedPlayers(players);
   if (online.length < 2) throw new RuleError("É preciso pelo menos duas pessoas na sala.");
   const next = bump(room);
   next.phase = "choosing";
+  next.matchOver = false;
+  next.notice = null;
+  next.hintUsed = false;
+  next.secret = "";
+  next.category = "";
+  next.wrong = [];
+  next.guessed = [];
+  next.result = null;
+  next.wordChooserId = null;
+  next.lastGuesserId = null;
   if (!online.some((player) => player.id === next.currentTurnId)) next.currentTurnId = online[0]!.id;
   return next;
 }
@@ -211,6 +295,7 @@ export function chooseWord(
   rawWord: string,
   rawCategory: string,
 ): RoomState {
+  if (room.matchOver) throw new RuleError("A partida terminou. O anfitrião pode iniciar outra.");
   if (room.phase === "playing") throw new RuleError("A rodada ainda está em andamento.");
   if (room.phase === "lobby") throw new RuleError("O anfitrião ainda precisa iniciar a partida.");
   if (room.phase !== "choosing" && room.phase !== "finished") {
@@ -232,6 +317,9 @@ export function chooseWord(
   next.result = null;
   next.lastGuesserId = null;
   next.currentTurnId = guesser;
+  next.hintUsed = false;
+  next.notice = null;
+  next.matchOver = false;
   return next;
 }
 
@@ -241,7 +329,7 @@ export function guessLetter(
   actorId: string,
   rawLetter: string,
 ): { room: RoomState; scores: ScoreDelta[] } {
-  if (room.phase !== "playing") throw new RuleError("Não há uma rodada em andamento.");
+  if (room.phase !== "playing" || room.matchOver) throw new RuleError("Não há uma rodada em andamento.");
   if (!actorId || actorId === room.wordChooserId) {
     throw new RuleError("Quem escolheu a palavra não joga nesta rodada.");
   }
@@ -257,17 +345,16 @@ export function guessLetter(
   if (normalize(room.secret).includes(letter)) {
     next.guessed = [...room.guessed, letter];
     if (allLettersFound(next.secret, next.guessed)) {
-      const bonus = 25 + livesLeft(next.wrong) * 5;
-      scores.push({ playerId: actorId, score: 10 + bonus, wins: 1 });
-      next.phase = "finished";
-      next.result = "won";
-      next.currentTurnId = nextPlayer(players, room.wordChooserId);
+      scores.push({ playerId: actorId, score: 15, wins: 1 });
+      const currentScore = players.find((player) => player.id === actorId)?.score ?? 0;
+      const finished = finishRound(next, players, actorId, currentScore + 15);
+      return { room: finished, scores };
     } else {
-      scores.push({ playerId: actorId, score: 10, wins: 0 });
       next.currentTurnId = nextGuesser(players, actorId, room.wordChooserId);
     }
   } else {
     next.wrong = [...room.wrong, letter];
+    scores.push({ playerId: actorId, score: -5, wins: 0 });
     if (next.wrong.length >= MAX_LIVES) {
       next.phase = "finished";
       next.result = "lost";
@@ -276,13 +363,86 @@ export function guessLetter(
       next.currentTurnId = nextGuesser(players, actorId, room.wordChooserId);
     }
   }
+  next.hintUsed = false;
+  next.notice = null;
   return { room: next, scores };
+}
+
+export function hintCandidates(room: RoomState, mode: HintMode): string[] {
+  const used = new Set([...room.guessed, ...room.wrong]);
+  return [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter((letter) => {
+    if (used.has(letter)) return false;
+    const inSecret = normalize(room.secret).includes(letter);
+    return mode === "reveal" ? inSecret : !inSecret;
+  });
+}
+
+export function useHint(
+  room: RoomState,
+  players: readonly PlayerState[],
+  actorId: string,
+  mode: HintMode,
+  rawLetter: string,
+): { room: RoomState; scores: ScoreDelta[]; letter: string } {
+  if (room.phase !== "playing" || room.matchOver) throw new RuleError("Não há uma rodada em andamento.");
+  if (!actorId || actorId === room.wordChooserId) {
+    throw new RuleError("Quem escolheu a palavra não joga nesta rodada.");
+  }
+  if (room.currentTurnId !== actorId) throw new RuleError("Ainda não é a sua vez.");
+  if (room.hintUsed) throw new RuleError("Você já usou o Poder Dica nesta vez.");
+  const player = players.find((item) => item.id === actorId);
+  if (!player) throw new RuleError("Jogador não encontrado.");
+  if (player.score < 10) {
+    throw new RuleError("Você precisa de pelo menos 10 pontos para usar o Poder Dica.");
+  }
+  const letter = normalizeGuess(rawLetter);
+  if (!letter || !hintCandidates(room, mode).includes(letter)) {
+    throw new RuleError(
+      `Não há letra disponível para ${mode === "reveal" ? "revelar" : "eliminar"}. Nenhum ponto foi descontado.`,
+    );
+  }
+
+  const next = bump(room);
+  next.hintUsed = true;
+  const scores: ScoreDelta[] = [{ playerId: actorId, score: -10, wins: 0 }];
+  if (mode === "reveal") next.guessed = [...next.guessed, letter];
+  else next.wrong = [...next.wrong, letter];
+
+  if (mode === "reveal" && allLettersFound(next.secret, next.guessed)) {
+    scores.push({ playerId: actorId, score: 15, wins: 1 });
+    next.lastGuesserId = actorId;
+    const finished = finishRound(
+      next,
+      players,
+      actorId,
+      applyScoreDelta(applyScoreDelta(player.score, -10), 15),
+    );
+    return { room: finished, scores, letter };
+  }
+
+  if (mode === "eliminate" && next.wrong.length >= MAX_LIVES) {
+    next.phase = "finished";
+    next.result = "lost";
+    next.currentTurnId = nextPlayer(players, room.wordChooserId);
+    next.hintUsed = false;
+  }
+  next.notice = {
+    id: next.revision,
+    kind: "hint",
+    message: mode === "reveal"
+      ? `${player.name} usou o Poder Dica e revelou ${letter}.`
+      : `${player.name} usou o Poder Dica e eliminou ${letter}.`,
+    winnerId: null,
+  };
+  return { room: next, scores, letter };
 }
 
 export function afterLeave(room: RoomState, players: readonly PlayerState[], leaverId: string): RoomState | null {
   const remaining = players.filter((player) => player.id !== leaverId);
-  if (!remaining.some((player) => player.connected) && remaining.length === 0) return null;
   if (!remaining.length) return null;
+  if (!room.matchOver && room.phase !== "lobby" && connectedPlayers(remaining).length < 2) {
+    return endForTooFewPlayers(room, remaining);
+  }
   const next = bump(room);
   if (next.hostId === leaverId) {
     next.hostId = (connectedPlayers(remaining)[0] ?? remaining[0]!).id;
@@ -293,15 +453,18 @@ export function afterLeave(room: RoomState, players: readonly PlayerState[], lea
       next.phase = "finished";
       next.result = "lost";
       next.currentTurnId = nextPlayer(remaining, next.wordChooserId) ?? remaining[0]!.id;
+      next.hintUsed = false;
       return next;
     }
     if (next.currentTurnId === leaverId || !guessers.some((player) => player.id === next.currentTurnId)) {
       next.currentTurnId = nextGuesser(remaining, leaverId, next.wordChooserId) ?? guessers[0]!.id;
+      next.hintUsed = false;
     }
     return next;
   }
   if (next.currentTurnId === leaverId || !remaining.some((player) => player.id === next.currentTurnId && player.connected)) {
     next.currentTurnId = nextPlayer(remaining, leaverId) ?? remaining[0]!.id;
+    next.hintUsed = false;
   }
   return next;
 }
@@ -352,5 +515,8 @@ export function projectRoom(room: RoomState, players: readonly PlayerState[], yo
     players: rankPlayers(players, room.hostId),
     revision: room.revision,
     youId,
+    matchOver: room.matchOver,
+    hintUsed: room.hintUsed,
+    notice: room.notice,
   };
 }

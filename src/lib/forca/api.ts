@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { RuleError } from "./rules";
+import { RuleError, type HintMode } from "./rules";
 
 type SessionOk = {
   ok: true;
@@ -118,6 +118,30 @@ export const submitGuessFn = createServerFn({ method: "POST" })
     try {
       const engine = await import("./engine.server");
       return { ok: true, state: await engine.submitGuess(data.code, data.playerId, data.token, data.letter) };
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+export const usePowerHintFn = createServerFn({ method: "POST" })
+  .validator((input: { code: string; playerId: string; token: string; mode: string }) => {
+    const mode = input?.mode;
+    if (mode !== "eliminate" && mode !== "reveal") throw new Error("Modalidade de dica inválida.");
+    const validatedMode: HintMode = mode === "reveal" ? "reveal" : "eliminate";
+    return {
+      code: String(input?.code ?? ""),
+      playerId: String(input?.playerId ?? ""),
+      token: String(input?.token ?? ""),
+      mode: validatedMode,
+    };
+  })
+  .handler(async ({ data }): Promise<StateOk | Fail> => {
+    try {
+      const engine = await import("./engine.server");
+      return {
+        ok: true,
+        state: await engine.submitHint(data.code, data.playerId, data.token, data.mode),
+      };
     } catch (error) {
       return fail(error);
     }

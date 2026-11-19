@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, Crown, House, Medal, Music, RotateCcw, User, Users, Volume2, VolumeX, Wifi } from "lucide-react";
-import { beginMatchFn, createRoomFn, joinRoomFn, leaveRoomFn, resumeRoomFn, submitGuessFn, submitWordFn, syncRoomFn } from "@/lib/forca/api";
+import { beginMatchFn, createRoomFn, joinRoomFn, leaveRoomFn, resumeRoomFn, submitGuessFn, submitWordFn, syncRoomFn, usePowerHintFn } from "@/lib/forca/api";
 import {
   audioPrefs,
   playHit,
@@ -92,6 +92,7 @@ export function GameApp() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const roomRef = useRef<PublicRoom | null>(null);
   const toastId = useRef(0);
+  const noticeRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
 
   useEffect(() => {
@@ -130,6 +131,13 @@ export function GameApp() {
   }
 
   function reactToRoom(previous: PublicRoom | null, next: PublicRoom) {
+    if (next.notice) {
+      const noticeKey = `${next.code}:${next.notice.id}`;
+      if (noticeRef.current !== noticeKey) {
+        noticeRef.current = noticeKey;
+        toast(next.notice.message);
+      }
+    }
     if (!previous || previous.code !== next.code) return;
     const previousIds = new Set(previous.players.map((player) => player.id));
     const nextIds = new Set(next.players.map((player) => player.id));
@@ -327,6 +335,11 @@ export function GameApp() {
 
   async function startOnline() {
     if (!session) return;
+    if (connectedCount < 2) {
+      const message = "É necessário pelo menos dois jogadores para iniciar a partida.";
+      toast(message);
+      return note(message, "bad");
+    }
     setBusy(true);
     const result = await beginMatchFn({ data: session });
     setBusy(false);
@@ -355,6 +368,28 @@ export function GameApp() {
     if (current.guessed.includes(letter) || current.wrong.includes(letter)) return;
     const result = await submitGuessFn({ data: { ...session, letter } });
     if (!result.ok) return note(result.error, "bad");
+    applyRoom(result.state);
+  }
+
+  async function sendOnlineHint(mode: "eliminate" | "reveal") {
+    if (!session || !roomRef.current) return;
+    const current = roomRef.current;
+    const myScore = current.players.find((player) => player.id === current.youId)?.score ?? 0;
+    if (
+      current.phase !== "playing" ||
+      current.matchOver ||
+      current.wordChooserId === current.youId ||
+      current.currentTurnId !== current.youId ||
+      myScore < 10 ||
+      current.hintUsed
+    ) return;
+    setBusy(true);
+    const result = await usePowerHintFn({ data: { ...session, mode } });
+    setBusy(false);
+    if (!result.ok) {
+      toast(result.error);
+      return note(result.error, "bad");
+    }
     applyRoom(result.state);
   }
 
@@ -401,13 +436,17 @@ export function GameApp() {
   const you = room?.youId ?? "";
   const connectedCount = room?.players.filter((player) => player.connected).length ?? 0;
   const isHost = !!room && room.hostId === you;
-  const choosing = !!room && (room.phase === "choosing" || room.phase === "finished") && room.currentTurnId === you;
+  const choosing = !!room && !room.matchOver && (room.phase === "choosing" || room.phase === "finished") && room.currentTurnId === you;
   const canGuess = !!room && room.phase === "playing" && room.wordChooserId !== you && room.currentTurnId === you;
+  const yourScore = room?.players.find((player) => player.id === you)?.score ?? 0;
+  const canUseHint = canGuess && yourScore >= 10 && !room?.hintUsed;
   const anyMedal = !!room?.players.some((player) => player.medal);
 
   let onlineStatus = status;
   if (room && view === "online") {
-    if (room.phase === "lobby") {
+    if (room.matchOver) {
+      onlineStatus = room.notice?.message ?? "A partida encerrou. O anfitrião pode iniciar outra.";
+    } else if (room.phase === "lobby") {
       onlineStatus = isHost
         ? connectedCount < 2
           ? "Compartilhe o código. A partida começa com duas pessoas."
@@ -617,9 +656,9 @@ export function GameApp() {
                   <button className="btn" type="button" onClick={() => void copyCode()}><Copy size={16} /> Copiar convite</button>
                   <button className="btn ghost" type="button" onClick={() => void leaveOnline()}>Sair da sala</button>
                 </div>
-                {room.phase === "lobby" && isHost && (
-                  <button className="btn primary" type="button" data-testid="start-match" disabled={busy || connectedCount < 2} onClick={() => void startOnline()}>
-                    Iniciar partida
+                {(room.phase === "lobby" || room.matchOver) && isHost && (
+                  <button className="btn primary" type="button" data-testid="start-match" disabled={busy} onClick={() => void startOnline()}>
+                    {room.matchOver ? "Iniciar nova partida" : "Iniciar partida"}
                   </button>
                 )}
                 {choosing && (
@@ -638,6 +677,43 @@ export function GameApp() {
                       {room.phase === "finished" ? "Começar próxima rodada" : "Escolher palavra"}
                     </button>
                   </>
+                )}
+                {room.phase === "playing" && room.wordChooserId !== you && (
+                  <section className="hint-box" aria-label="Poder Dica">
+                    <div className="panel-head">
+                      <h2>Poder Dica</h2>
+                      <span className="tag">custa 10 pontos</span>
+                    </div>
+                    <p className="helper">
+                      {room.hintUsed
+                        ? "Você já usou sua dica nesta vez."
+                        : canGuess
+                          ? "Disponível nesta vez; a dica não passa sua vez."
+                          : "Disponível quando chegar sua vez."}
+                    </p>
+                    <div className="row">
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={!canUseHint || busy}
+                        onClick={() => void sendOnlineHint("eliminate")}
+                      >
+                        Eliminar letra
+                      </button>
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={!canUseHint || busy}
+                        onClick={() => void sendOnlineHint("reveal")}
+                      >
+                        Revelar letra
+                      </button>
+                    </div>
+                    <p className="helper">Palavra descoberta: +15 · letra errada: -5 · dica: -10. O placar começa em 0 e nunca fica negativo; a dica exige saldo de 10 pontos.</p>
+                    {canGuess && yourScore < 10 && (
+                      <p className="helper" role="status">São necessários 10 pontos para usar a dica.</p>
+                    )}
+                  </section>
                 )}
                 <div>
                   <h2>Classificação</h2>

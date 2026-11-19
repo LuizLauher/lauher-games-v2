@@ -5,6 +5,7 @@ const MELODY = [196, 233.08, 261.63, 293.66, 261.63, 233.08, 220, 196];
 
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
+let limiter: DynamicsCompressorNode | null = null;
 let musicBus: GainNode | null = null;
 let sfxBus: GainNode | null = null;
 let prefs: Prefs = { music: true, sfx: true };
@@ -52,8 +53,8 @@ function curve(on: boolean, amount: number): number {
 function applyGains(): void {
   if (!ctx || !musicBus || !sfxBus) return;
   const now = ctx.currentTime;
-  musicBus.gain.setTargetAtTime(curve(prefs.music, 0.22), now, 0.03);
-  sfxBus.gain.setTargetAtTime(curve(prefs.sfx, 0.8), now, 0.02);
+  musicBus.gain.setTargetAtTime(Math.min(1, curve(prefs.music, 0.22) * 1.2), now, 0.03);
+  sfxBus.gain.setTargetAtTime(Math.min(1, curve(prefs.sfx, 0.8) * 1.2), now, 0.02);
 }
 
 export function unlockAudio(): void {
@@ -63,10 +64,17 @@ export function unlockAudio(): void {
   if (!ctx) {
     ctx = new AudioCtx({ latencyHint: "interactive" });
     master = ctx.createGain();
+    limiter = ctx.createDynamicsCompressor();
     musicBus = ctx.createGain();
     sfxBus = ctx.createGain();
-    musicBus.connect(master);
-    sfxBus.connect(master);
+    limiter.threshold.value = -8;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 8;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.15;
+    musicBus.connect(limiter);
+    sfxBus.connect(limiter);
+    limiter.connect(master);
     master.connect(ctx.destination);
     master.gain.value = 1;
   }

@@ -11,11 +11,14 @@ import {
   startMatch,
   cleanName,
   type Phase,
+  type HintMode,
   type PlayerState,
   type PublicRoom,
   type RoomState,
   type RoundResult,
   type ScoreDelta,
+  hintCandidates,
+  useHint,
 } from "./rules";
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -34,6 +37,12 @@ type RowRoom = {
   word_chooser_id: string | null;
   current_turn_id: string | null;
   revision: number;
+  match_over: boolean | number | string;
+  hint_used: boolean | number | string;
+  notice_id: number | null;
+  notice_kind: string | null;
+  notice_message: string | null;
+  winner_id: string | null;
 };
 
 type RowPlayer = {
@@ -100,6 +109,16 @@ function mapRoom(row: RowRoom): RoomState {
     wordChooserId: row.word_chooser_id,
     currentTurnId: row.current_turn_id,
     revision: Number(row.revision) || 0,
+    matchOver: asBool(row.match_over),
+    hintUsed: asBool(row.hint_used),
+    notice: row.notice_kind && row.notice_message
+      ? {
+          id: Number(row.notice_id) || 0,
+          kind: row.notice_kind as "players" | "target" | "hint",
+          message: row.notice_message,
+          winnerId: row.winner_id,
+        }
+      : null,
   };
 }
 
@@ -125,7 +144,7 @@ async function sweep(sql: Sql): Promise<void> {
 
 async function loadRoom(sql: Sql, code: string): Promise<RoomState> {
   const rows = await sql.query<RowRoom>(
-    "select code, host_id, phase, category, secret_word, wrong_letters, guessed_letters, result, last_guesser_id, word_chooser_id, current_turn_id, revision from forca_rooms where code = $1",
+    "select code, host_id, phase, category, secret_word, wrong_letters, guessed_letters, result, last_guesser_id, word_chooser_id, current_turn_id, revision, match_over, hint_used, notice_id, notice_kind, notice_message, winner_id from forca_rooms where code = $1",
     [code],
   );
   const row = rows[0];
@@ -149,8 +168,10 @@ async function saveRoom(sql: Sql, room: RoomState, expectedRevision: number): Pr
       host_id = $2, phase = $3, category = $4, secret_word = $5,
       wrong_letters = $6, guessed_letters = $7, result = $8,
       last_guesser_id = $9, word_chooser_id = $10, current_turn_id = $11,
+      match_over = $12, hint_used = $13, notice_id = $14,
+      notice_kind = $15, notice_message = $16, winner_id = $17,
       revision = revision + 1, updated_at = now()
-     where code = $1 and revision = $12
+     where code = $1 and revision = $18
      returning revision`,
     [
       room.code,
@@ -164,6 +185,12 @@ async function saveRoom(sql: Sql, room: RoomState, expectedRevision: number): Pr
       room.lastGuesserId,
       room.wordChooserId,
       room.currentTurnId,
+      room.matchOver,
+      room.hintUsed,
+      room.notice?.id ?? null,
+      room.notice?.kind ?? null,
+      room.notice?.message ?? null,
+      room.notice?.winnerId ?? null,
       expectedRevision,
     ],
   );
@@ -172,7 +199,7 @@ async function saveRoom(sql: Sql, room: RoomState, expectedRevision: number): Pr
 
 async function applyScores(sql: Sql, scores: ScoreDelta[]): Promise<void> {
   for (const delta of scores) {
-    await sql.query("update forca_players set score = score + $2, wins = wins + $3 where id = $1", [
+    await sql.query("update forca_players set score = greatest(0, score + $2), wins = wins + $3 where id = $1", [
       delta.playerId,
       delta.score,
       delta.wins,
@@ -184,19 +211,24 @@ async function touch(sql: Sql, playerId: string): Promise<void> {
   await sql.query("update forca_players set last_seen = now() where id = $1", [playerId]);
 }
 
+async function resetRoomScores(sql: Sql, code: string): Promise<void> {
+  await sql.query("update forca_players set score = 0 where room_code = $1", [code]);
+}
+
 async function project(sql: Sql, code: string, youId: string): Promise<PublicRoom> {
-  const [freshRoom, freshPlayers] = await Promise.all([loadRoom(sql, code), loadPlayers(sql, code)]);
+  const freshRoom = await loadRoom(sql, code);
+  const freshPlayers = await loadPlayers(sql, code);
   return projectRoom(freshRoom, freshPlayers, youId);
 }
 
 async function withPlayer(
+  sql: Sql,
   code: string,
   playerId: string,
   token: string,
 ): Promise<{ sql: Sql; room: RoomState; players: PlayerState[] }> {
   const cleanCode = String(code || "").trim().toUpperCase();
   if (!/^[A-HJ-NP-Z2-9]{5}$/.test(cleanCode)) throw new RuleError("Código inválido. Use cinco caracteres.");
-  const sql = await getSql();
   const hash = sha(token);
   const auth = await sql.query<{ id: string }>(
     "select id from forca_players where id = $1 and room_code = $2 and token_hash = $3",
@@ -204,12 +236,19 @@ async function withPlayer(
   );
   if (!auth.length) throw new RuleError("Sessão expirada. Entre de novo com o código da sala.");
   await touch(sql, playerId);
+  await sql.query(
+    "update forca_players set score = 0 where room_code = $1 and last_seen < now() - interval '20 seconds'",
+    [cleanCode],
+  );
   await sweep(sql);
   let room = await loadRoom(sql, cleanCode);
   let players = await loadPlayers(sql, cleanCode);
   const reconciled = reconcile(room, players);
   if (reconciled !== room) {
     const saved = await saveRoom(sql, reconciled, room.revision);
+    if (saved && reconciled.matchOver && !room.matchOver) {
+      await resetRoomScores(sql, cleanCode);
+    }
     room = saved ? reconciled : await loadRoom(sql, cleanCode);
     players = await loadPlayers(sql, cleanCode);
   }
@@ -221,27 +260,29 @@ export async function createRoom(nameRaw: string): Promise<SessionResult> {
   if (name.length < 1) throw new RuleError("Digite um apelido válido.");
   allow("create:" + name.toLowerCase(), 12);
   const sql = await getSql();
-  await sweep(sql);
   const id = randomUUID();
   const token = randomBytes(32).toString("base64url");
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const code = makeCode();
-    const existing = await sql.query("select code from forca_rooms where code = $1", [code]);
-    if (existing.length) continue;
-    await sql.query(
-      `insert into forca_rooms
-        (code, host_id, phase, category, secret_word, wrong_letters, guessed_letters, current_turn_id, revision)
-       values ($1, $2, 'lobby', '', '', '', '', $2, 0)`,
-      [code, id],
-    );
-    await sql.query(
-      `insert into forca_players (id, room_code, name, score, wins, token_hash, seat, last_seen)
-       values ($1, $2, $3, 0, 0, $4, 0, now())`,
-      [id, code, name, sha(token)],
-    );
-    return { token, playerId: id, state: await project(sql, code, id) };
-  }
-  throw new RuleError("Não foi possível criar a sala. Tente novamente.");
+  return sql.transaction(async (tx) => {
+    await sweep(tx);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const code = makeCode();
+      const existing = await tx.query("select code from forca_rooms where code = $1", [code]);
+      if (existing.length) continue;
+      await tx.query(
+        `insert into forca_rooms
+          (code, host_id, phase, category, secret_word, wrong_letters, guessed_letters, current_turn_id, revision)
+         values ($1, $2, 'lobby', '', '', '', '', $2, 0)`,
+        [code, id],
+      );
+      await tx.query(
+        `insert into forca_players (id, room_code, name, score, wins, token_hash, seat, last_seen)
+         values ($1, $2, $3, 0, 0, $4, 0, now())`,
+        [id, code, name, sha(token)],
+      );
+      return { token, playerId: id, state: await project(tx, code, id) };
+    }
+    throw new RuleError("Não foi possível criar a sala. Tente novamente.");
+  });
 }
 
 export async function joinRoom(nameRaw: string, codeRaw: string): Promise<SessionResult> {
@@ -251,20 +292,41 @@ export async function joinRoom(nameRaw: string, codeRaw: string): Promise<Sessio
   if (!/^[A-HJ-NP-Z2-9]{5}$/.test(code)) throw new RuleError("Código inválido. Use cinco caracteres.");
   allow("join:" + code, 20);
   const sql = await getSql();
-  await sweep(sql);
-  const room = await loadRoom(sql, code);
-  if (room.phase === "playing") throw new RuleError("A rodada já começou. Aguarde a próxima para entrar.");
-  const players = await loadPlayers(sql, code);
-  if (players.length >= MAX_PLAYERS) throw new RuleError("Esta sala está cheia.");
-  const id = randomUUID();
   const token = randomBytes(32).toString("base64url");
-  const seat = players.reduce((max, player) => Math.max(max, player.seat), -1) + 1;
-  await sql.query(
-    `insert into forca_players (id, room_code, name, score, wins, token_hash, seat, last_seen)
-     values ($1, $2, $3, 0, 0, $4, $5, now())`,
-    [id, code, name, sha(token), seat],
-  );
-  return { token, playerId: id, state: await project(sql, code, id) };
+  return sql.transaction(async (tx) => {
+    await sweep(tx);
+    const room = await loadRoom(tx, code);
+    if (room.phase === "playing" && !room.matchOver) {
+      throw new RuleError("A rodada já começou. Aguarde a próxima para entrar.");
+    }
+    const players = await loadPlayers(tx, code);
+    const duplicate = await tx.query<{ id: string; seat: number; connected: boolean }>(
+      `select id, seat, (last_seen > now() - interval '20 seconds') as connected
+       from forca_players where room_code = $1 and lower(name) = lower($2)
+       order by seat asc limit 1 for update`,
+      [code, name],
+    );
+    if (duplicate[0]?.connected) throw new RuleError("Esse apelido já está em uso nesta sala.");
+    if (!duplicate.length && players.length >= MAX_PLAYERS) throw new RuleError("Esta sala está cheia.");
+
+    const id = duplicate[0]?.id ?? randomUUID();
+    const seat = duplicate[0]?.seat ?? players.reduce((max, player) => Math.max(max, player.seat), -1) + 1;
+    if (duplicate.length) {
+      await tx.query(
+        `update forca_players set name = $2, score = 0, wins = 0, token_hash = $3, last_seen = now()
+         where id = $1 and room_code = $4`,
+        [id, name, sha(token), code],
+      );
+    } else {
+      await tx.query(
+        `insert into forca_players (id, room_code, name, score, wins, token_hash, seat, last_seen)
+         values ($1, $2, $3, 0, 0, $4, $5, now())`,
+        [id, code, name, sha(token), seat],
+      );
+    }
+    await tx.query("update forca_rooms set revision = revision + 1, updated_at = now() where code = $1", [code]);
+    return { token, playerId: id, state: await project(tx, code, id) };
+  });
 }
 
 export async function resumeRoom(codeRaw: string, token: string): Promise<SessionResult> {
@@ -273,28 +335,37 @@ export async function resumeRoom(codeRaw: string, token: string): Promise<Sessio
     throw new RuleError("Não foi possível recuperar a sessão. Entre de novo pelo código.");
   }
   const sql = await getSql();
-  const found = await sql.query<{ id: string }>(
-    "select id from forca_players where room_code = $1 and token_hash = $2",
-    [code, sha(token)],
-  );
-  const player = found[0];
-  if (!player) throw new RuleError("Sessão expirada ou inválida. Entre de novo pelo código.");
-  const rotatedToken = randomBytes(32).toString("base64url");
-  const rotated = await sql.query<{ id: string }>(
-    `update forca_players set token_hash = $1, last_seen = now()
-     where id = $2 and room_code = $3 and token_hash = $4
-     returning id`,
-    [sha(rotatedToken), player.id, code, sha(token)],
-  );
-  if (!rotated.length) throw new RuleError("Sessão já foi retomada em outro dispositivo. Entre novamente.");
-  const loaded = await withPlayer(code, player.id, rotatedToken);
-  return { token: rotatedToken, playerId: player.id, state: projectRoom(loaded.room, loaded.players, player.id) };
+  return sql.transaction(async (tx) => {
+    const found = await tx.query<{ id: string }>(
+      "select id from forca_players where room_code = $1 and token_hash = $2",
+      [code, sha(token)],
+    );
+    const player = found[0];
+    if (!player) throw new RuleError("Sessão expirada ou inválida. Entre de novo pelo código.");
+    const rotatedToken = randomBytes(32).toString("base64url");
+    const rotated = await tx.query<{ id: string }>(
+      `update forca_players set token_hash = $1, last_seen = now()
+       where id = $2 and room_code = $3 and token_hash = $4
+       returning id`,
+      [sha(rotatedToken), player.id, code, sha(token)],
+    );
+    if (!rotated.length) throw new RuleError("Sessão já foi retomada em outro dispositivo. Entre novamente.");
+    const loaded = await withPlayer(tx, code, player.id, rotatedToken);
+    return {
+      token: rotatedToken,
+      playerId: player.id,
+      state: projectRoom(loaded.room, loaded.players, player.id),
+    };
+  });
 }
 
 export async function syncRoom(code: string, playerId: string, token: string): Promise<PublicRoom> {
   allow("sync:" + playerId, 30);
-  const loaded = await withPlayer(code, playerId, token);
-  return projectRoom(loaded.room, loaded.players, playerId);
+  const sql = await getSql();
+  return sql.transaction(async (tx) => {
+    const loaded = await withPlayer(tx, code, playerId, token);
+    return projectRoom(loaded.room, loaded.players, playerId);
+  });
 }
 
 async function commit(
@@ -304,13 +375,20 @@ async function commit(
   mutate: (room: RoomState, players: PlayerState[]) => { room: RoomState; scores: ScoreDelta[] },
 ): Promise<PublicRoom> {
   allow("act:" + playerId, 24);
+  const sql = await getSql();
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const loaded = await withPlayer(code, playerId, token);
-    const next = mutate(loaded.room, loaded.players);
-    const saved = await saveRoom(loaded.sql, next.room, loaded.room.revision);
-    if (!saved) continue;
-    await applyScores(loaded.sql, next.scores);
-    return project(loaded.sql, loaded.room.code, playerId);
+    const committed = await sql.transaction(async (tx) => {
+      const loaded = await withPlayer(tx, code, playerId, token);
+      const next = mutate(loaded.room, loaded.players);
+      const saved = await saveRoom(tx, next.room, loaded.room.revision);
+      if (!saved) return null;
+      if (loaded.room.matchOver && !next.room.matchOver) {
+        await resetRoomScores(tx, loaded.room.code);
+      }
+      await applyScores(tx, next.scores);
+      return project(tx, loaded.room.code, playerId);
+    });
+    if (committed) return committed;
   }
   throw new RuleError("A sala mudou ao mesmo tempo. Tente novamente.");
 }
@@ -344,20 +422,50 @@ export async function submitGuess(
   return commit(code, playerId, token, (room, players) => guessLetter(room, players, playerId, letter));
 }
 
+export async function submitHint(
+  code: string,
+  playerId: string,
+  token: string,
+  mode: HintMode,
+): Promise<PublicRoom> {
+  return commit(code, playerId, token, (room, players) => {
+    const candidates = hintCandidates(room, mode);
+    if (!candidates.length) {
+      throw new RuleError(
+        `Não há letra disponível para ${mode === "reveal" ? "revelar" : "eliminar"}. Nenhum ponto foi descontado.`,
+      );
+    }
+    const letter = candidates[randomInt(candidates.length)]!;
+    return useHint(room, players, playerId, mode, letter);
+  });
+}
+
 export async function leaveRoom(code: string, playerId: string, token: string): Promise<{ left: true }> {
-  const loaded = await withPlayer(code, playerId, token);
-  const snapshot = loaded.players;
-  await loaded.sql.query("delete from forca_players where id = $1 and room_code = $2", [playerId, loaded.room.code]);
-  const next = afterLeave(loaded.room, snapshot, playerId);
-  if (!next) {
-    await loaded.sql.query("delete from forca_rooms where code = $1", [loaded.room.code]);
+  const sql = await getSql();
+  return sql.transaction(async (tx) => {
+    const loaded = await withPlayer(tx, code, playerId, token);
+    const snapshot = loaded.players;
+    await tx.query("delete from forca_players where id = $1 and room_code = $2", [playerId, loaded.room.code]);
+    const next = afterLeave(loaded.room, snapshot, playerId);
+    if (!next) {
+      await tx.query("delete from forca_rooms where code = $1", [loaded.room.code]);
+      return { left: true };
+    }
+    const saved = await saveRoom(tx, next, loaded.room.revision);
+    if (saved && next.matchOver && !loaded.room.matchOver) {
+      await resetRoomScores(tx, loaded.room.code);
+    }
+    if (!saved) {
+      const latest = await loadRoom(tx, loaded.room.code);
+      const players = await loadPlayers(tx, loaded.room.code);
+      const healed = reconcile(latest, players);
+      if (healed !== latest) {
+        const fixed = await saveRoom(tx, healed, latest.revision);
+        if (fixed && healed.matchOver && !latest.matchOver) {
+          await resetRoomScores(tx, loaded.room.code);
+        }
+      }
+    }
     return { left: true };
-  }
-  const saved = await saveRoom(loaded.sql, next, loaded.room.revision);
-  if (!saved) {
-    const latest = await loadRoom(loaded.sql, loaded.room.code);
-    const healed = reconcile(latest, await loadPlayers(loaded.sql, loaded.room.code));
-    if (healed !== latest) await saveRoom(loaded.sql, healed, latest.revision);
-  }
-  return { left: true };
+  });
 }

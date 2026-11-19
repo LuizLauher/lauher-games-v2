@@ -21,6 +21,9 @@ function room(phase: PublicRoom["phase"], wrong: string[]): PublicRoom {
     players: [],
     revision: 1,
     youId: "guest",
+    matchOver: false,
+    hintUsed: false,
+    notice: null,
   };
 }
 
@@ -41,5 +44,12 @@ describe("shared hangman drawing", () => {
     const app = readFileSync(new URL("../../components/forca/game-app.tsx", import.meta.url), "utf8");
     assert.match(app, /<HangmanStage mistakes=\{shownMistakes\} shake=\{shake\} \/>/);
     assert.match(app, /displayedMistakes\(view, local\.wrong\.length, room\)/);
+  });
+
+  it("blocks the hint power below 10 points and never bypasses it in the handler", () => {
+    const app = readFileSync(new URL("../../components/forca/game-app.tsx", import.meta.url), "utf8");
+    assert.match(app, /const canUseHint = canGuess && yourScore >= 10 && !room\?\.hintUsed/);
+    assert.match(app, /disabled=\{!canUseHint \|\| busy\}/);
+    assert.match(app, /myScore < 10/);
   });
 });
