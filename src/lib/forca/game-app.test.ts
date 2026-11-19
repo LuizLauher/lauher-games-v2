@@ -66,8 +66,10 @@ describe("shared hangman drawing", () => {
     assert.match(app, /<dt>Saldo mínimo para usar dica<\/dt><dd>10 pontos<\/dd>/);
     assert.match(app, /event\.key === "Escape"/);
     assert.match(app, /panel\.contains\(event\.target\)/);
-    assert.match(styles, /\.scoring-info-content dl > div \{\s*display: block;/);
-    assert.match(styles, /\.scoring-info-content dd \{[^}]*font-weight: 400;[^}]*line-height: 1\.5;/s);
+    assert.match(styles, /\.scoring-info-content dl > div \{\s*display: grid;/);
+    assert.match(styles, /\.scoring-info-content h3 \{[^}]*text-transform: uppercase;/s);
+    assert.match(styles, /\.scoring-info-content dd \{[^}]*font-weight: 700;[^}]*text-align: right;/s);
+    assert.match(styles, /\.scoring-info-content \{[^}]*width: 100%;[^}]*max-width: calc\(100vw - 2rem\);/s);
     assert.match(styles, /max-height: calc\(100dvh - 2rem\);/);
     assert.match(app, /<h2>Dica<\/h2>/);
     assert.doesNotMatch(app, /<h2>Poder Dica<\/h2>/);
@@ -83,9 +85,8 @@ describe("shared hangman drawing", () => {
     assert.ok(app.indexOf('className="player-name"') < app.indexOf("className=\"streak-badge\""));
     assert.ok(app.indexOf("className=\"streak-badge\"") < app.indexOf("<strong>{player.score}</strong>"));
     assert.match(app, /player\.streak >= 2 \? "has-streak" : ""/);
-    assert.match(styles, /grid-template-areas:\s*"medal player streak"\s*"score score score";/);
-    assert.match(styles, /\.score-row\.has-streak > strong \{[^}]*justify-self: start;/s);
-    assert.match(styles, /\.streak-badge \{[^}]*flex-direction: column;/s);
+    assert.match(styles, /\.score-row \{\s*display: grid;\s*grid-template-columns: auto minmax\(0, 1fr\) auto auto;/);
+    assert.match(styles, /\.streak-badge \{[^}]*display: inline-flex;[^}]*border-radius: 999px;/s);
     assert.doesNotMatch(app, /<small>\{player\.connected \? "na sala"/);
     assert.match(app, /SEQUÊNCIA x\$\{player\.streak\}! \+\$\{player\.streak\} PONTOS EXTRAS/);
     assert.match(app, /SEQUÊNCIA PERDIDA!/);
