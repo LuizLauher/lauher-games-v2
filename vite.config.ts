@@ -10,16 +10,6 @@ export default defineConfig(({ command, isPreview }) => ({
     port: 8080,
     strictPort: true,
   },
-  build: {
-    rollupOptions: {
-      output: {
-        assetFileNames: (assetInfo) =>
-          assetInfo.name === "styles.css"
-            ? "assets/styles.css"
-            : "assets/[name]-[hash][extname]",
-      },
-    },
-  },
   preview: {
     host: "127.0.0.1",
     port: 8081,
