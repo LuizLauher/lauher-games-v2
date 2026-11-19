@@ -777,7 +777,15 @@ export function GameApp() {
                   )}
                   <ol className="scoreboard">
                     {room.players.map((player) => (
-                      <li key={player.id} className={player.id === you ? "score-row you" : player.connected ? "score-row" : "score-row off"}>
+                      <li
+                        key={player.id}
+                        className={[
+                          "score-row",
+                          player.id === you ? "you" : "",
+                          !player.connected ? "off" : "",
+                          player.streak >= 2 ? "has-streak" : "",
+                        ].filter(Boolean).join(" ")}
+                      >
                         <span className={player.medal ? `medal ${player.medal}` : "medal"} aria-hidden="true">
                           {player.medal === "gold" ? <Crown size={18} /> : player.medal ? <Medal size={18} /> : <span className="place">{player.rank}º</span>}
                         </span>
